@@ -3,13 +3,21 @@ import {makeIndex} from "./lib/utils.js";
 const BASE_URL = 'https://webinars.webdev.education-services.ru/sp7-api';
 
 export function initData(sourceData) {
-    // переменные для кеширования данных
+    const localSellers = makeIndex(sourceData.sellers, 'id', v => `${v.first_name} ${v.last_name}`);
+    const localCustomers = makeIndex(sourceData.customers, 'id', v => `${v.first_name} ${v.last_name}`);
+    const localData = sourceData.purchase_records.map(item => ({
+        id: item.receipt_id,
+        date: item.date,
+        seller: localSellers[item.seller_id],
+        customer: localCustomers[item.customer_id],
+        total: item.total_amount
+    }));
+
     let sellers;
     let customers;
     let lastResult;
     let lastQuery;
 
-    // функция для приведения строк в тот вид, который нужен нашей таблице
     const mapRecords = (data) => data.map(item => ({
         id: item.receipt_id,
         date: item.date,
@@ -18,20 +26,23 @@ export function initData(sourceData) {
         total: item.total_amount
     }));
 
-    // функция получения индексов
     const getIndexes = async () => {
         if (!sellers || !customers) {
-            [sellers, customers] = await Promise.all([
-                fetch(`${BASE_URL}/sellers`).then(res => res.json()),
-                fetch(`${BASE_URL}/customers`).then(res => res.json()),
-            ]);
+            try {
+                [sellers, customers] = await Promise.all([
+                    fetch(`${BASE_URL}/sellers`).then(res => res.json()),
+                    fetch(`${BASE_URL}/customers`).then(res => res.json()),
+                ]);
+            } catch (error) {
+                sellers = localSellers;
+                customers = localCustomers;
+            }
         }
 
         return { sellers, customers };
-    }
+    };
 
-    // функция получения записей о продажах с сервера
-    const getRecords = async (query, isUpdated = false) => {
+    const getRecords = async (query = {}, isUpdated = false) => {
         const qs = new URLSearchParams(query);
         const nextQuery = qs.toString();
 
@@ -39,16 +50,30 @@ export function initData(sourceData) {
             return lastResult;
         }
 
-        const response = await fetch(`${BASE_URL}/records?${nextQuery}`);
-        const records = await response.json();
+        try {
+            if (!sellers || !customers) {
+                await getIndexes();
+            }
 
-        lastQuery = nextQuery;
-        lastResult = {
-            total: records.total,
-            items: mapRecords(records.items)
-        };
+            const response = await fetch(`${BASE_URL}/records?${nextQuery}`);
+            const records = await response.json();
 
-        return lastResult;
+            lastQuery = nextQuery;
+            lastResult = {
+                total: records.total,
+                items: mapRecords(records.items)
+            };
+
+            return lastResult;
+        } catch (error) {
+            lastQuery = nextQuery;
+            lastResult = {
+                total: localData.length,
+                items: localData
+            };
+
+            return lastResult;
+        }
     };
 
     return {
